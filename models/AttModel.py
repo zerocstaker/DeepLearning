@@ -184,91 +184,125 @@ class AttModel(CaptionModel):
         return seq.transpose(0, 1), seqLogprobs.transpose(0, 1)
 
     def _sample(self, fc_feats, att_feats, att_masks=None, opt={}):
-
+        print("If see this other than in training, there is probably a bug because of modification to this funciton")
         sample_max = opt.get('sample_max', 1)
         beam_size = opt.get('beam_size', 1)
         temperature = opt.get('temperature', 1.0)
         decoding_constraint = opt.get('decoding_constraint', 0)
         block_trigrams = opt.get('block_trigrams', 0)
+        #Assume we always use beam size = 1
         if beam_size > 1:
             return self._sample_beam(fc_feats, att_feats, att_masks, opt)
 
         batch_size = fc_feats.size(0)
-        state = self.init_hidden(batch_size)
+        
 
         p_fc_feats, p_att_feats, pp_att_feats, p_att_masks = self._prepare_feature(fc_feats, att_feats, att_masks)
 
-        trigrams = [] # will be a list of batch_size dictionaries
+        
 
-        seq = fc_feats.new_zeros((batch_size, self.seq_length), dtype=torch.long)
-        seqLogprobs = fc_feats.new_zeros(batch_size, self.seq_length)
-        for t in range(self.seq_length + 1):
-            if t == 0: # input <bos>
-                it = fc_feats.new_zeros(batch_size, dtype=torch.long)
+        
 
-            logprobs, state = self.get_logprobs_state(it, p_fc_feats, p_att_feats, pp_att_feats, p_att_masks, state)
-            
-            if decoding_constraint and t > 0:
-                tmp = logprobs.new_zeros(logprobs.size())
-                tmp.scatter_(1, seq[:,t-1].data.unsqueeze(1), float('-inf'))
-                logprobs = logprobs + tmp
+        #self.seq_length * [batch * self.seq_length(not necessarily reach this length)]
+        sample_list = []  #i represent sampling from the ith word
+        probs_list = []
+        action_list = fc_feats.new_zeros((batch_size, self.seq_length), dtype=torch.long)
+        action_probs_list = fc_feats.new_zeros(batch_size, self.seq_length)
+        
+        for i in range(self.seq_length):
+            #start with greedy everytime
+            state = self.init_hidden(batch_size)
+            seq = fc_feats.new_zeros((batch_size, self.seq_length), dtype=torch.long)
+            seqLogprobs = fc_feats.new_zeros(batch_size, self.seq_length)
+            trigrams = [] # will be a list of batch_size dictionaries
+            sample_max = 1
+            for t in range(self.seq_length + 1):
+                if t == 0: # input <bos>
+                    it = fc_feats.new_zeros(batch_size, dtype=torch.long)
 
-            # Mess with trigrams
-            if block_trigrams and t >= 3:
-                # Store trigram generated at last step
-                prev_two_batch = seq[:,t-3:t-1]
-                for i in range(batch_size): # = seq.size(0)
-                    prev_two = (prev_two_batch[i][0].item(), prev_two_batch[i][1].item())
-                    current  = seq[i][t-1]
-                    if t == 3: # initialize
-                        trigrams.append({prev_two: [current]}) # {LongTensor: list containing 1 int}
-                    elif t > 3:
-                        if prev_two in trigrams[i]: # add to list
-                            trigrams[i][prev_two].append(current)
-                        else: # create list
-                            trigrams[i][prev_two] = [current]
-                # Block used trigrams at next step
-                prev_two_batch = seq[:,t-2:t]
-                mask = torch.zeros(logprobs.size(), requires_grad=False).cuda() # batch_size x vocab_size
-                for i in range(batch_size):
-                    prev_two = (prev_two_batch[i][0].item(), prev_two_batch[i][1].item())
-                    if prev_two in trigrams[i]:
-                        for j in trigrams[i][prev_two]:
-                            mask[i,j] += 1
-                # Apply mask to log probs
-                #logprobs = logprobs - (mask * 1e9)
-                alpha = 2.0 # = 4
-                logprobs = logprobs + (mask * -0.693 * alpha) # ln(1/2) * alpha (alpha -> infty works best)
+                #start sampling from the ith word
+                if t == i:
+                    sample_max = 0
+                #here, we get the log probability of each words
+                logprobs, state = self.get_logprobs_state(it, p_fc_feats, p_att_feats, pp_att_feats, p_att_masks, state)
+                
+                if decoding_constraint and t > 0:
+                    tmp = logprobs.new_zeros(logprobs.size())
+                    tmp.scatter_(1, seq[:,t-1].data.unsqueeze(1), float('-inf'))
+                    logprobs = logprobs + tmp
 
-            # sample the next word
-            if t == self.seq_length: # skip if we achieve maximum length
-                break
-            if sample_max:
-                sampleLogprobs, it = torch.max(logprobs.data, 1)
-                it = it.view(-1).long()
-            else:
-                if temperature == 1.0:
-                    prob_prev = torch.exp(logprobs.data) # fetch prev distribution: shape Nx(M+1)
+                # Mess with trigrams
+                if block_trigrams and t >= 3:
+                    # Store trigram generated at last step
+                    prev_two_batch = seq[:,t-3:t-1]
+                    for i in range(batch_size): # = seq.size(0)
+                        prev_two = (prev_two_batch[i][0].item(), prev_two_batch[i][1].item())
+                        current  = seq[i][t-1]
+                        if t == 3: # initialize
+                            trigrams.append({prev_two: [current]}) # {LongTensor: list containing 1 int}
+                        elif t > 3:
+                            if prev_two in trigrams[i]: # add to list
+                                trigrams[i][prev_two].append(current)
+                            else: # create list
+                                trigrams[i][prev_two] = [current]
+                    # Block used trigrams at next step
+                    prev_two_batch = seq[:,t-2:t]
+                    mask = torch.zeros(logprobs.size(), requires_grad=False).cuda() # batch_size x vocab_size
+                    for i in range(batch_size):
+                        prev_two = (prev_two_batch[i][0].item(), prev_two_batch[i][1].item())
+                        if prev_two in trigrams[i]:
+                            for j in trigrams[i][prev_two]:
+                                mask[i,j] += 1
+                    # Apply mask to log probs
+                    #logprobs = logprobs - (mask * 1e9)
+                    alpha = 2.0 # = 4
+                    logprobs = logprobs + (mask * -0.693 * alpha) # ln(1/2) * alpha (alpha -> infty works best)
+
+                # sample the next word
+                if t == self.seq_length: # skip if we achieve maximum length
+                    break
+                #This is greedy
+                if sample_max:
+                    sampleLogprobs, it = torch.max(logprobs.data, 1)
+                    it = it.view(-1).long()
+                #This is sampling
                 else:
-                    # scale logprobs by temperature
-                    prob_prev = torch.exp(torch.div(logprobs.data, temperature))
-                it = torch.multinomial(prob_prev, 1)
-                sampleLogprobs = logprobs.gather(1, it) # gather the logprobs at sampled positions
-                it = it.view(-1).long() # and flatten indices for downstream processing
+                    if temperature == 1.0:
+                        prob_prev = torch.exp(logprobs.data) # fetch prev distribution: shape Nx(M+1)
+                    else:
+                        # scale logprobs by temperature
+                        prob_prev = torch.exp(torch.div(logprobs.data, temperature))
+                    it = torch.multinomial(prob_prev, 1)
+                    sampleLogprobs = logprobs.gather(1, it) # gather the logprobs at sampled positions
+                    it = it.view(-1).long() # and flatten indices for downstream processing
 
-            # stop when all finished
-            if t == 0:
-                unfinished = it > 0
-            else:
-                unfinished = unfinished * (it > 0)
-            it = it * unfinished.type_as(it)
-            seq[:,t] = it
-            seqLogprobs[:,t] = sampleLogprobs.view(-1)
-            # quit loop if all sequences have finished
-            if unfinished.sum() == 0:
+                # stop when all finished
+                if t == 0:
+                    unfinished = it > 0
+                else:
+                    unfinished = unfinished * (it > 0)
+
+                #it is the sampled word that we got
+                it = it * unfinished.type_as(it)
+                seq[:,t] = it
+                seqLogprobs[:,t] = sampleLogprobs.view(-1)
+
+                if(t==i):
+                    action_list[:,t] = it
+                    action_probs_list[:,t] = sampleLogprobs.view(-1)
+                # quit loop if all sequences have finished
+                if unfinished.sum() == 0:
+                    break
+                sample_list.append(seq)
+                probs_list.append(seqLogprobs)
+
+            #break the loop once the length exceed the greedy one
+            #this happends when all sentences end
+            #therefore, the last one is pure greedy decoding
+            if(sample_max == 1):
                 break
 
-        return seq, seqLogprobs
+        return sample_list, probs_list, action_list, action_probs_list
 
 class AdaAtt_lstm(nn.Module):
     def __init__(self, opt, use_maxout=True):
