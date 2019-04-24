@@ -1,0 +1,5 @@
+# next times
+python train.py --id transformer --caption_model transformer --noamopt --noamopt_warmup 20000 --label_smoothing 0.0 --input_json data/cocotalk.json --input_label_h5 data/cocotalk_label.h5 --input_fc_dir data/cocotalk_fc --input_att_dir data/cocotalk_att --seq_per_img 5 --batch_size 10 --beam_size 1 --learning_rate 5e-4 --rnn_type gru --num_layers 6 --input_encoding_size 512 --rnn_size 2048 --learning_rate_decay_start 0 --scheduled_sampling_start 0 --checkpoint_path log_transformer --save_checkpoint_every 5000 --language_eval 1 --val_images_use 5000 --max_epochs 10
+
+# self self_critical_after
+python train.py --id transformer --caption_model transformer --reduce_on_plateau --input_json data/cocotalk.json --input_label_h5 data/cocotalk_label.h5 --input_fc_dir data/cocotalk_fc --input_att_dir data/cocotalk_att --seq_per_img 5 --batch_size 10 --beam_size 1 --learning_rate 1e-5 --rnn_type gru --num_layers 6 --input_encoding_size 512 --rnn_size 2048 --checkpoint_path log_transformer --start_from log_transformer --save_checkpoint_every 3000 --language_eval 1 --val_images_use 5000 --self_critical_after 10 
