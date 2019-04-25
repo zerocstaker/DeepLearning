@@ -55,4 +55,6 @@ The instruction from the unofficial implementation is a little complicated, so h
       $ python -m SimpleHTTPServer
       ```
 
+6. ### Model
+Our model can be downloaded here:https://drive.google.com/open?id=1DMnnM1rKyf_ArUsTngGD9cS_501DuDAM
 
